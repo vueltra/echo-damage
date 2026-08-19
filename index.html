@@ -14,7 +14,7 @@
   *{box-sizing:border-box}
   html, body{height:100%}
   body{
-    margin:0; background:var(--bg); color:var(--text);
+    margin:0; background:var(--bg); color:var(--text); overflow-x:hidden;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
 
@@ -68,12 +68,23 @@
   .rank-3{color:#d99a5e}
   .empty{padding:40px; text-align:center; color:var(--text-dim)}
   .top1{color:var(--text-dim); font-size:12px; margin-left:6px}
-  .table-wrap{border:1px solid var(--border); border-radius:10px}
+  /* table-wrap is the ONLY thing allowed to scroll sideways - without this,
+     one long unwrapped cell (a long server/alliance name, or the Top 1
+     name+damage pair) forces the whole page wider than the viewport, which
+     is what reads as "off-center"/shifted on a phone: the page itself was
+     scrolling horizontally, not just the table. */
+  .table-wrap{border:1px solid var(--border); border-radius:10px; overflow-x:auto; max-width:100%}
 
   @media (max-width: 640px){
     .page{flex-direction:column}
     .sidebar{width:100%; flex:0 0 auto; position:static; height:auto; border-right:none; border-bottom:1px solid var(--border); flex-direction:row; flex-wrap:wrap}
     .sidebar .field{flex:1 1 130px}
+    .content{padding:12px}
+    /* let long text wrap instead of forcing table-wrap to scroll in the
+       first place - desktop keeps nowrap for cleaner column alignment,
+       mobile prioritizes staying within the viewport */
+    tbody td:not(.rank):not(.dmg):not(.pct){white-space:normal; word-break:break-word}
+    .top1{display:block; margin-left:0}
   }
 </style>
 </head>
@@ -314,7 +325,10 @@ function getFilteredRows(data) {
   const search = el.search.value.trim().toLowerCase();
 
   return data.rows.filter(r => {
-    if (alliance !== "All" && r.alliance !== alliance) return false;
+    // Alliance filter is hidden (and doesn't apply) in Alliance rank-type
+    // mode - we're ranking alliances themselves there, so filtering rows
+    // down to one alliance first would make that view show only 1 result.
+    if (rankType !== "alliance" && alliance !== "All" && r.alliance !== alliance) return false;
     // the standalone Server filter only applies in Player rank-type mode -
     // in Server mode the Server dropdown is hidden (we're ranking servers,
     // not pre-selecting one) and Alliance narrows things instead.
@@ -368,14 +382,9 @@ function buildDisplayRows(data) {
   const boss = el.boss.value;
   const rankType = el.rankType.value;
 
-  let playerLevelRows, showOriginalRank;
-  if (boss === "All") {
-    playerLevelRows = aggregateAllBosses(filtered);
-    showOriginalRank = false;
-  } else {
-    playerLevelRows = filtered.slice();
-    showOriginalRank = true;
-  }
+  let playerLevelRows;
+  if (boss === "All") playerLevelRows = aggregateAllBosses(filtered);
+  else playerLevelRows = filtered.slice();
 
   let rows;
   if (rankType === "alliance") rows = computeGroupRanking(playerLevelRows, "alliance");
@@ -393,21 +402,22 @@ function buildDisplayRows(data) {
   const totalDamage = rows.reduce((s, r) => s + r.damage, 0) || 1;
   rows.forEach(r => { r.pct = (r.damage / totalDamage) * 100; });
 
-  // Rank LABEL = each row's true standing (1 = highest damage), computed
-  // once here and kept stable regardless of how the table is currently
-  // sorted for display. Player mode with one boss selected already has a
-  // real per-boss rank from the source data; everything else (Boss:All
-  // aggregate, Alliance/Server rank types) gets one assigned by a
-  // damage-descending pass done BEFORE the user's chosen sort is applied.
-  // This is what makes reversing the Rank column actually show the bottom
-  // of the leaderboard first (e.g. 240, 239, ... 1) instead of just
-  // relabeling whichever row ends up on top as "1" every time.
-  if (rankType === "player" && showOriginalRank) {
-    rows.forEach(r => { r._displayRank = r.rank; });
-  } else {
-    const byDamage = rows.slice().sort((a, b) => b.damage - a.damage);
-    byDamage.forEach((r, i) => { r._displayRank = i + 1; });
-  }
+  // Rank LABEL = each row's standing (1 = highest damage) WITHIN the
+  // currently filtered/displayed set, computed once here and kept stable
+  // regardless of how the table is currently sorted for display (this is
+  // what makes reversing the Rank column actually show the bottom of the
+  // list first, e.g. 240, 239, ... 1, instead of just relabeling whichever
+  // row ends up on top as "1" every time).
+  //
+  // Deliberately always recomputed here, even in Player mode with a single
+  // boss selected - NOT the row's original source-data rank from the full,
+  // unfiltered boss leaderboard. With no other filters applied the two are
+  // identical anyway (the source data is already damage-sorted), but the
+  // moment an Alliance/Server filter narrows the view, showing the sparse
+  // original ranks (e.g. 12, 15, 28, 32...) reads as broken - a filtered
+  // view should renumber cleanly from 1.
+  const byDamage = rows.slice().sort((a, b) => b.damage - a.damage);
+  byDamage.forEach((r, i) => { r._displayRank = i + 1; });
 
   // display ORDER: whatever column/direction is currently chosen - this
   // reorders rows but never touches the _displayRank assigned above.
@@ -522,8 +532,20 @@ function updateFilterVisibility() {
   // Alliance: ranking alliances themselves, neither filter applies.
   // Server: ranking servers - Alliance still useful (narrow to one
   // alliance's servers), standalone Server pre-selection doesn't.
-  el.fieldAlliance.classList.toggle("hidden", rankType === "alliance");
-  el.fieldServer.classList.toggle("hidden", rankType !== "player");
+  const allianceHidden = rankType === "alliance";
+  const serverHidden = rankType !== "player";
+  el.fieldAlliance.classList.toggle("hidden", allianceHidden);
+  el.fieldServer.classList.toggle("hidden", serverHidden);
+  // reset a filter's value once it's hidden, so switching rank type never
+  // leaves a stale filter silently narrowing a view that no longer shows
+  // that control (this was a real bug: Alliance stayed set to a previous
+  // value after switching to Alliance rank type, making that view show
+  // only itself instead of every alliance)
+  if (allianceHidden && el.alliance.value !== "All") {
+    el.alliance.value = "All";
+    if (currentSeasonData) populateServerSelect(currentSeasonData);
+  }
+  if (serverHidden && el.server.value !== "All") el.server.value = "All";
   el.searchLabel.textContent = rankType === "player" ? "Search username"
     : rankType === "alliance" ? "Search alliance" : "Search server";
   el.search.placeholder = rankType === "player" ? "username..."
