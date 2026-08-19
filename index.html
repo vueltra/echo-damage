@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ECHO COSMOS — Shattered Cosmos Leaderboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#0f1216; --panel:#161a20; --panel2:#1c2129; --border:#2a3038;
+    --text:#e8ebef; --text-dim:#9aa4b2; --accent:#5b9dff; --accent-dim:#2e4a72;
+    --row-alt:#141820; --row-hover:#1f2530; --sidebar-w:190px;
+    font-size:15px;
+  }
+  *{box-sizing:border-box}
+  html, body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+
+  /* ---- layout: narrow always-visible sidebar, no overlay/toggle -------- */
+  /* the point of a plain sticky sidebar over a dropdown/modal panel is that
+     it can never overlap or hide table rows - simplest option that can't
+     visually break, which is what mattered after the floating-panel bug */
+  .page{display:flex; align-items:flex-start}
+  .sidebar{
+    width:var(--sidebar-w); flex:0 0 var(--sidebar-w);
+    position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+    background:var(--panel); border-right:1px solid var(--border);
+    padding:14px 12px; display:flex; flex-direction:column; gap:10px;
+  }
+  .content{flex:1; min-width:0; padding:14px 20px}
+
+  h1{font-size:14px; margin:0 0 1px; font-weight:600; letter-spacing:.02em}
+  .subtitle{color:var(--text-dim); font-size:10px; margin:0 0 8px; line-height:1.3}
+
+  .field{display:flex; flex-direction:column; gap:3px}
+  .field.hidden{display:none}
+  .field label{font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--text-dim)}
+  select, input[type=text]{
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:6px 8px; font-size:13px; width:100%;
+  }
+  select:focus, input:focus{outline:none; border-color:var(--accent)}
+
+  .meta{color:var(--text-dim); font-size:12px; margin:0 2px 10px}
+  .meta strong{color:var(--text)}
+
+  /* ---- table: single page-level scroll, no nested scroll box ----------- */
+  table{width:100%; border-collapse:collapse; font-size:14px; border-radius:10px; overflow:hidden}
+  thead th{
+    position:sticky; top:0; background:var(--panel2); text-align:left;
+    padding:9px 12px; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--text-dim); border-bottom:1px solid var(--border); cursor:pointer;
+    user-select:none; white-space:nowrap; z-index:5;
+  }
+  thead th:hover{color:var(--text)}
+  thead th.sorted{color:var(--accent)}
+  thead th .arrow{font-size:10px; margin-left:3px; opacity:.7}
+  tbody td{padding:8px 12px; border-bottom:1px solid var(--border)}
+  tbody tr:nth-child(even){background:var(--row-alt)}
+  tbody tr:hover{background:var(--row-hover)}
+  td.rank{color:var(--text-dim); font-variant-numeric:tabular-nums; width:1%}
+  td.dmg, td.pct{font-variant-numeric:tabular-nums; text-align:right}
+  td.pct{color:var(--text-dim); width:1%}
+  .rank-1{color:#ffd54a}
+  .rank-2{color:#c9d3e0}
+  .rank-3{color:#d99a5e}
+  .empty{padding:40px; text-align:center; color:var(--text-dim)}
+  .top1{color:var(--text-dim); font-size:12px; margin-left:6px}
+  .table-wrap{border:1px solid var(--border); border-radius:10px}
+
+  @media (max-width: 640px){
+    .page{flex-direction:column}
+    .sidebar{width:100%; flex:0 0 auto; position:static; height:auto; border-right:none; border-bottom:1px solid var(--border); flex-direction:row; flex-wrap:wrap}
+    .sidebar .field{flex:1 1 130px}
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <aside class="sidebar">
+    <div>
+      <h1>Cosmos Damage</h1>
+      <p class="subtitle">ASIA - by @vueltra</p>
+    </div>
+    <div class="field">
+      <label for="f-season">Season</label>
+      <select id="f-season"></select>
+    </div>
+    <div class="field">
+      <label for="f-ranktype">Rank type</label>
+      <select id="f-ranktype">
+        <option value="player">Player</option>
+        <option value="alliance">Alliance</option>
+        <option value="server">Server</option>
+      </select>
+    </div>
+    <div class="field" id="field-alliance">
+      <label for="f-alliance">Alliance</label>
+      <select id="f-alliance"></select>
+    </div>
+    <div class="field" id="field-server">
+      <label for="f-server">Server</label>
+      <select id="f-server"></select>
+    </div>
+    <div class="field">
+      <label for="f-boss">Boss</label>
+      <select id="f-boss"></select>
+    </div>
+    <div class="field">
+      <label for="f-search" id="label-search">Search</label>
+      <input type="text" id="f-search" placeholder="username...">
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta" id="meta"></div>
+    <div class="table-wrap">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<script>
+/* =========================================================================
+ * ECHO COSMOS leaderboard viewer — stage 4 of the pipeline
+ *   pic -> raw -> json -> html/css/js   (this file)
+ *
+ * SECURITY NOTE: this file is 100% client-side and public once pasted into
+ * CodePen. Never put an S3 access/secret key pair here — "prod" data is
+ * served as PUBLIC-READ JSON fetched by plain HTTPS URL, no credentials
+ * needed to read it. The key pair used to upload stays in a local/dev-side
+ * script only (code/build_json/, code/ocr/), never in this file.
+ * ======================================================================= */
+
+// ---- data source config -------------------------------------------------
+// DATA_MODE: "dev" fetches the local JSON produced by code/build_json/
+// (works when this file is served over http(s), e.g. `python3 -m http.server`
+// from the project root — NOT via file:// due to browser CORS restrictions).
+// "prod" fetches from the public-read nevacloud/S3 bucket URL below, once
+// you've uploaded Season_x.json there. Flip this one line to switch.
+const DATA_MODE = "prod"; // "dev" | "prod"
+
+// Add one entry per season here as new ones are extracted — nothing else
+// in this file needs to change (Season_23 etc. will just show up in the
+// Season dropdown once added). `label` is what's shown in the dropdown
+// (just the number, per the user) - the object key is still the full
+// "Season_NN" name used for file paths and internal lookups everywhere.
+const SEASONS = {
+  "Season_22": {
+    label: "22",
+    dev:  "../../Season_22/database/Season_22.json",
+    prod: "https://s3.nevaobjects.id/echo-game-1/Season_22.json",
+  },
+};
+
+// ---- state ----------------------------------------------------------------
+let currentSeasonData = null; // the fetched {season,bosses,rows,alliance_servers} object
+const cache = {};             // season name -> fetched data
+let sortKey = "damage";
+let sortDir = -1;             // -1 desc, 1 asc
+
+const el = {
+  season: document.getElementById("f-season"),
+  rankType: document.getElementById("f-ranktype"),
+  alliance: document.getElementById("f-alliance"),
+  server: document.getElementById("f-server"),
+  boss: document.getElementById("f-boss"),
+  search: document.getElementById("f-search"),
+  searchLabel: document.getElementById("label-search"),
+  fieldAlliance: document.getElementById("field-alliance"),
+  fieldServer: document.getElementById("field-server"),
+  meta: document.getElementById("meta"),
+  thead: document.getElementById("thead"),
+  tbody: document.getElementById("tbody"),
+};
+
+// Column definitions per Rank Type. sortable columns carry a data-key;
+// "Top 1" isn't sortable, it's just context alongside the group's total.
+const COLUMNS = {
+  player: [
+    { key: "rank", label: "Rank", cls: "rank" },
+    { key: "username", label: "Username" },
+    { key: "alliance", label: "Alliance" },
+    { key: "server", label: "Server" },
+    { key: "damage", label: "Damage", cls: "dmg" },
+    { key: "pct", label: "%Damage", cls: "pct" },
+  ],
+  alliance: [
+    { key: "rank", label: "Rank", cls: "rank" },
+    { key: "name", label: "Alliance" },
+    { key: null, label: "Top 1" },
+    { key: "damage", label: "Damage", cls: "dmg" },
+    { key: "pct", label: "%Damage", cls: "pct" },
+  ],
+  server: [
+    { key: "rank", label: "Rank", cls: "rank" },
+    { key: "name", label: "Server" },
+    { key: null, label: "Top 1" },
+    { key: "damage", label: "Damage", cls: "dmg" },
+    { key: "pct", label: "%Damage", cls: "pct" },
+  ],
+};
+
+// ---- label formatting -------------------------------------------------------
+// "Boss3_Lord3" -> "3 - Lord3", "Boss8_Kashian" -> "8 - Kashian", "All" -> "All"
+function formatBossLabel(bossKey) {
+  if (bossKey === "All") return "All";
+  const m = bossKey.match(/^Boss(\d+)_(.+)$/);
+  return m ? `${m[1]} - ${m[2]}` : bossKey;
+}
+
+// ---- damage number formatting ---------------------------------------------
+// Mirrors the in-game K/M/B/T convention, used for any synthesized total
+// (Boss:All player aggregate, or any Alliance/Server group total) - rows
+// straight from one boss keep their own original damage_display string.
+function formatDamage(n) {
+  if (n == null) return "";
+  const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+  for (const [v, suf] of units) {
+    if (n >= v) {
+      const num = n / v;
+      const s = num >= 100 ? Math.round(num).toString() : (Math.round(num * 10) / 10).toString();
+      return s.replace(/\.0$/, "") + suf;
+    }
+  }
+  return String(Math.round(n));
+}
+
+// Adaptive precision: most rows in a large filtered set have a tiny share,
+// which at a fixed 2 decimals just reads as "0.00%" for hundreds of rows -
+// not useful. Show more decimals the smaller the value gets instead of a
+// fixed count everywhere.
+function formatPct(p) {
+  if (p <= 0) return "0%";
+  if (p >= 1) return p.toFixed(2) + "%";
+  if (p >= 0.01) return p.toFixed(3) + "%";
+  if (p >= 0.0001) return p.toFixed(4) + "%";
+  return "<0.0001%";
+}
+
+// ---- data loading -----------------------------------------------------------
+async function loadSeason(name) {
+  if (cache[name]) return cache[name];
+  const url = SEASONS[name][DATA_MODE];
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`failed to fetch ${url}: ${res.status}`);
+  const data = await res.json();
+  cache[name] = data;
+  return data;
+}
+
+function uniqueSorted(values) {
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function populateSelect(selectEl, values, labelFn) {
+  const prev = selectEl.value;
+  selectEl.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "All";
+  allOpt.textContent = "All";
+  selectEl.appendChild(allOpt);
+  for (const v of values) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = labelFn ? labelFn(v) : v;
+    selectEl.appendChild(opt);
+  }
+  selectEl.value = values.includes(prev) || prev === "All" ? prev : "All";
+}
+
+function populateFiltersFromData(data) {
+  populateSelect(el.alliance, uniqueSorted(data.rows.map(r => r.alliance)));
+  populateServerSelect(data);
+  populateSelect(el.boss, data.bosses, formatBossLabel);
+}
+
+// Server dropdown is cascaded off the Alliance selection using the
+// pre-computed alliance_servers map from the JSON (persisted at build time
+// since raw data is frozen once a season's screenshots are in - see
+// code/build_json/README.md) - NOT an exclusive-ownership map, a server can
+// legitimately show up under more than one alliance, this just narrows to
+// "servers seen under the selected alliance" rather than every server ever.
+function populateServerSelect(data) {
+  const alliance = el.alliance.value;
+  const servers = (alliance !== "All" && data.alliance_servers[alliance])
+    ? data.alliance_servers[alliance]
+    : uniqueSorted(data.rows.map(r => r.server));
+  populateSelect(el.server, servers);
+}
+
+function populateSeasonSelect() {
+  el.season.innerHTML = "";
+  for (const name of Object.keys(SEASONS)) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = SEASONS[name].label || name;
+    el.season.appendChild(opt);
+  }
+}
+
+// ---- filtering / aggregation / sorting -------------------------------------
+function getFilteredRows(data) {
+  const rankType = el.rankType.value;
+  const alliance = el.alliance.value;
+  const server = el.server.value;
+  const boss = el.boss.value;
+  const search = el.search.value.trim().toLowerCase();
+
+  return data.rows.filter(r => {
+    if (alliance !== "All" && r.alliance !== alliance) return false;
+    // the standalone Server filter only applies in Player rank-type mode -
+    // in Server mode the Server dropdown is hidden (we're ranking servers,
+    // not pre-selecting one) and Alliance narrows things instead.
+    if (rankType === "player" && server !== "All" && r.server !== server) return false;
+    if (boss !== "All" && r.boss !== boss) return false;
+    if (rankType === "player" && search && !r.username.toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+function aggregateAllBosses(rows) {
+  const groups = new Map(); // "username server" -> aggregate row
+  for (const r of rows) {
+    const key = r.username + " " + r.server;
+    let g = groups.get(key);
+    if (!g) {
+      g = { username: r.username, server: r.server, alliance: r.alliance, damage: 0, bossCount: 0 };
+      groups.set(key, g);
+    }
+    g.damage += r.damage;
+    g.bossCount += 1;
+  }
+  return Array.from(groups.values()).map(g => ({ ...g, damage_display: formatDamage(g.damage) }));
+}
+
+// Groups player-level rows (either one boss's raw rows, or the Boss:All
+// per-player aggregate - either way each row already represents "this
+// player's damage for the current boss selection") by alliance or server,
+// summing damage and tracking whichever single player has the highest
+// damage in that group as "Top 1". Doing this on already-boss-resolved
+// player rows (not raw per-boss rows blindly summed) is what makes Top 1
+// correct in Boss:All mode - it reflects each player's own total, not
+// whichever single boss appearance happened to have the biggest number.
+function computeGroupRanking(playerRows, keyField) {
+  const groups = new Map();
+  for (const r of playerRows) {
+    const key = r[keyField];
+    if (!key) continue;
+    let g = groups.get(key);
+    if (!g) { g = { name: key, damage: 0, top1: null }; groups.set(key, g); }
+    g.damage += r.damage;
+    if (!g.top1 || r.damage > g.top1.damage) {
+      g.top1 = { username: r.username, damage: r.damage };
+    }
+  }
+  return Array.from(groups.values()).map(g => ({ ...g, damage_display: formatDamage(g.damage) }));
+}
+
+function buildDisplayRows(data) {
+  const filtered = getFilteredRows(data);
+  const boss = el.boss.value;
+  const rankType = el.rankType.value;
+
+  let playerLevelRows, showOriginalRank;
+  if (boss === "All") {
+    playerLevelRows = aggregateAllBosses(filtered);
+    showOriginalRank = false;
+  } else {
+    playerLevelRows = filtered.slice();
+    showOriginalRank = true;
+  }
+
+  let rows;
+  if (rankType === "alliance") rows = computeGroupRanking(playerLevelRows, "alliance");
+  else if (rankType === "server") rows = computeGroupRanking(playerLevelRows, "server");
+  else rows = playerLevelRows;
+
+  // in group modes, search filters the group name (alliance/server) itself,
+  // applied post-grouping rather than pre-grouping (searching player rows by
+  // alliance/server substring would just re-implement the dropdown filter)
+  if (rankType !== "player") {
+    const search = el.search.value.trim().toLowerCase();
+    if (search) rows = rows.filter(r => r.name.toLowerCase().includes(search));
+  }
+
+  const totalDamage = rows.reduce((s, r) => s + r.damage, 0) || 1;
+  rows.forEach(r => { r.pct = (r.damage / totalDamage) * 100; });
+
+  // Rank LABEL = each row's true standing (1 = highest damage), computed
+  // once here and kept stable regardless of how the table is currently
+  // sorted for display. Player mode with one boss selected already has a
+  // real per-boss rank from the source data; everything else (Boss:All
+  // aggregate, Alliance/Server rank types) gets one assigned by a
+  // damage-descending pass done BEFORE the user's chosen sort is applied.
+  // This is what makes reversing the Rank column actually show the bottom
+  // of the leaderboard first (e.g. 240, 239, ... 1) instead of just
+  // relabeling whichever row ends up on top as "1" every time.
+  if (rankType === "player" && showOriginalRank) {
+    rows.forEach(r => { r._displayRank = r.rank; });
+  } else {
+    const byDamage = rows.slice().sort((a, b) => b.damage - a.damage);
+    byDamage.forEach((r, i) => { r._displayRank = i + 1; });
+  }
+
+  // display ORDER: whatever column/direction is currently chosen - this
+  // reorders rows but never touches the _displayRank assigned above.
+  rows.sort((a, b) => {
+    let av, bv;
+    if (sortKey === "rank") { av = a._displayRank; bv = b._displayRank; }
+    else if (sortKey === "pct") { av = a.pct; bv = b.pct; }
+    else if (sortKey === "damage") { av = a.damage; bv = b.damage; }
+    else { av = (a[sortKey] || "").toString(); bv = (b[sortKey] || "").toString(); }
+    if (typeof av === "string") return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+
+  return { rows, totalDamage, rankType };
+}
+
+// ---- rendering --------------------------------------------------------------
+function renderThead(rankType) {
+  el.thead.innerHTML = "";
+  const tr = document.createElement("tr");
+  for (const col of COLUMNS[rankType]) {
+    const th = document.createElement("th");
+    if (col.key) th.dataset.key = col.key;
+    if (col.cls) th.classList.add(col.cls);
+    th.textContent = col.label;
+    tr.appendChild(th);
+  }
+  el.thead.appendChild(tr);
+  updateSortIndicators();
+}
+
+// Never hide missing/bad data - a blank/unreadable value still gets a row
+// and a visible placeholder instead of vanishing, since dropping anything
+// silently corrupts every rank and %Damage total downstream (this is
+// exactly how 2 real rows went missing once before it was caught - see
+// NOTES.md and code/build_json/README.md).
+function orBlank(s) {
+  const esc = escapeHtml(s);
+  return esc ? esc : "<em>(blank)</em>";
+}
+
+function renderRank(r) {
+  return r._displayRank == null ? "?" : r._displayRank;
+}
+
+function renderDamageCell(r) {
+  if (r.flag && /unparseable_damage/.test(r.flag)) {
+    const raw = escapeHtml(r.damage_display);
+    return `<em title="${escapeHtml(r.flag)}">(unreadable${raw ? ": " + raw : ""})</em>`;
+  }
+  return escapeHtml(r.damage_display) || "<em>—</em>";
+}
+
+function renderRow(r, rankType) {
+  const tr = document.createElement("tr");
+  const rankClass = r._displayRank === 1 ? "rank-1" : r._displayRank === 2 ? "rank-2" : r._displayRank === 3 ? "rank-3" : "";
+  if (r.flag) tr.title = r.flag;
+  if (rankType === "player") {
+    tr.innerHTML = `
+      <td class="rank ${rankClass}">${renderRank(r)}</td>
+      <td>${orBlank(r.username)}</td>
+      <td>${orBlank(r.alliance)}</td>
+      <td>${orBlank(r.server)}</td>
+      <td class="dmg">${renderDamageCell(r)}</td>
+      <td class="pct">${formatPct(r.pct)}</td>
+    `;
+  } else {
+    const top1name = r.top1 ? orBlank(r.top1.username) : "—";
+    const top1dmg = r.top1 ? formatDamage(r.top1.damage) : "";
+    tr.innerHTML = `
+      <td class="rank ${rankClass}">${renderRank(r)}</td>
+      <td>${orBlank(r.name)}</td>
+      <td>${top1name}<span class="top1">${top1dmg}</span></td>
+      <td class="dmg">${escapeHtml(r.damage_display)}</td>
+      <td class="pct">${formatPct(r.pct)}</td>
+    `;
+  }
+  return tr;
+}
+
+function render() {
+  if (!currentSeasonData) return;
+  const { rows, totalDamage, rankType } = buildDisplayRows(currentSeasonData);
+
+  const noun = rankType === "player" ? "player" : rankType === "alliance" ? "alliance" : "server";
+  el.meta.innerHTML = `<strong>${rows.length}</strong> ${noun}${rows.length === 1 ? "" : "s"} shown` +
+    (el.boss.value === "All" ? ` · totals aggregated across all bosses` : ``) +
+    ` · combined damage <strong>${formatDamage(totalDamage)}</strong>`;
+
+  el.tbody.innerHTML = "";
+  if (rows.length === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="${COLUMNS[rankType].length}" class="empty">No rows match the current filters.</td>`;
+    el.tbody.appendChild(tr);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const r of rows) frag.appendChild(renderRow(r, rankType));
+  el.tbody.appendChild(frag);
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ---- rank-type-driven filter visibility ------------------------------------
+function updateFilterVisibility() {
+  const rankType = el.rankType.value;
+  // Player: Alliance + Server both meaningful (narrow to one player's context).
+  // Alliance: ranking alliances themselves, neither filter applies.
+  // Server: ranking servers - Alliance still useful (narrow to one
+  // alliance's servers), standalone Server pre-selection doesn't.
+  el.fieldAlliance.classList.toggle("hidden", rankType === "alliance");
+  el.fieldServer.classList.toggle("hidden", rankType !== "player");
+  el.searchLabel.textContent = rankType === "player" ? "Search username"
+    : rankType === "alliance" ? "Search alliance" : "Search server";
+  el.search.placeholder = rankType === "player" ? "username..."
+    : rankType === "alliance" ? "alliance..." : "server...";
+}
+
+// ---- fix: native <select> keyboard typeahead + stray keystrokes ------------
+// A focused <select> jumps to the option starting with whatever letter key
+// is pressed (native browser behavior) and fires "change" - so a stray
+// keystroke landing on a focused dropdown right as focus is about to move
+// away (e.g. an OS screenshot shortcut like Win+Shift+S delivering a
+// leftover "s" keydown to the page) can silently flip a filter. Blurring
+// the active element whenever the window/tab loses focus closes that gap.
+function blurActiveElement() {
+  if (document.activeElement && typeof document.activeElement.blur === "function") {
+    document.activeElement.blur();
+  }
+}
+window.addEventListener("blur", blurActiveElement);
+document.addEventListener("visibilitychange", () => { if (document.hidden) blurActiveElement(); });
+
+// ---- sort header clicks -----------------------------------------------------
+el.thead.addEventListener("click", (e) => {
+  const th = e.target.closest("th");
+  if (!th || !th.dataset.key) return;
+  const key = th.dataset.key;
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = key === "username" || key === "alliance" || key === "server" || key === "name" ? 1 : -1; }
+  updateSortIndicators();
+  render();
+});
+
+function updateSortIndicators() {
+  el.thead.querySelectorAll("th").forEach(th => {
+    th.classList.remove("sorted");
+    th.querySelector(".arrow")?.remove();
+    if (th.dataset.key === sortKey) {
+      th.classList.add("sorted");
+      const span = document.createElement("span");
+      span.className = "arrow";
+      span.textContent = sortDir === 1 ? "▲" : "▼";
+      th.appendChild(span);
+    }
+  });
+}
+
+// ---- wiring -------------------------------------------------------------
+async function onSeasonChange() {
+  try {
+    currentSeasonData = await loadSeason(el.season.value);
+    populateFiltersFromData(currentSeasonData);
+    renderThead(el.rankType.value);
+    render();
+  } catch (err) {
+    el.meta.textContent = `Failed to load data: ${err.message}`;
+    console.error(err);
+  }
+}
+
+function onRankTypeChange() {
+  updateFilterVisibility();
+  renderThead(el.rankType.value);
+  render();
+}
+
+function onAllianceChange() {
+  // cascade: repopulate Server options to only those seen under the
+  // selected alliance, resetting to "All" if the previous choice no longer
+  // applies
+  populateServerSelect(currentSeasonData);
+  render();
+}
+
+el.season.addEventListener("change", onSeasonChange);
+el.rankType.addEventListener("change", onRankTypeChange);
+el.alliance.addEventListener("change", onAllianceChange);
+el.server.addEventListener("change", render);
+el.boss.addEventListener("change", render);
+let searchDebounce;
+el.search.addEventListener("input", () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(render, 150);
+});
+
+// ---- init -----------------------------------------------------------------
+populateSeasonSelect();
+updateFilterVisibility();
+onSeasonChange();
+</script>
+</body>
+</html>
